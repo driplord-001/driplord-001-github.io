@@ -14,8 +14,12 @@ const PORT = process.env.PORT || 3000;
 const allowedOrigins = [
   'http://localhost:5500',
   'http://localhost:3000',
-  'https://resplendent-platypus-de88a4.netlify.app', // Your Netlify frontend
-  process.env.FRONTEND_URL // This is set in Render environment
+  // Old Netlify frontend (optional – you can remove after testing)
+  'https://resplendent-platypus-de88a4.netlify.app',
+  // ✅ NEW Netlify frontend
+  'https://precious-cobbler-0a0716.netlify.app',
+  // Render environment variable (set in dashboard)
+  process.env.FRONTEND_URL
 ].filter(Boolean); // Remove any undefined values
 
 app.use(cors({
@@ -55,8 +59,8 @@ app.use('/api/admin', adminRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
   });
