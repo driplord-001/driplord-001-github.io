@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { supabaseAdmin } = require('../supabase/client');
 const { Resend } = require('resend');
 
+// Initialize Resend with your API key from environment variables
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // ---------- Helper: generate 6-digit OTP ----------
@@ -13,8 +14,11 @@ const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString()
 // ---------- Helper: send OTP email ----------
 const sendOTPEmail = async (email, otp) => {
   try {
+    // Use the from email from environment or fallback to test domain
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'FX SMARTBULL <onboarding@resend.dev>';
+
     const { data, error } = await resend.emails.send({
-      from: 'FX SMARTBULL <noreply@yourdomain.com>',
+      from: fromEmail,
       to: [email],
       subject: 'Your FX SMARTBULL Verification Code',
       html: `
@@ -30,7 +34,11 @@ const sendOTPEmail = async (email, otp) => {
         </div>
       `
     });
-    if (error) throw error;
+
+    if (error) {
+      console.error('Resend error:', error);
+      return false;
+    }
     return true;
   } catch (err) {
     console.error('Email send error:', err);
@@ -84,9 +92,6 @@ router.post('/register', async (req, res) => {
   if (!sent) {
     return res.status(500).json({ message: 'Failed to send OTP email. Please try again later.' });
   }
-
-  // Store temporary registration data (optional: you can store in session or just rely on email for verification)
-  // We'll pass firstName, lastName, phone, country in the next step (verify-otp) to finalize creation.
 
   res.status(200).json({ message: 'OTP sent to your email.' });
 });
