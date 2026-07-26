@@ -5,7 +5,6 @@ const jwt = require('jsonwebtoken');
 const { supabaseAdmin } = require('../supabase/client');
 const { Resend } = require('resend');
 
-// Initialize Resend with your API key from environment variables
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // ---------- Helper: generate 6-digit OTP ----------
@@ -14,9 +13,7 @@ const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString()
 // ---------- Helper: send OTP email ----------
 const sendOTPEmail = async (email, otp) => {
   try {
-    // Use the from email from environment or fallback to test domain
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'FX SMARTBULL <onboarding@resend.dev>';
-
     const { data, error } = await resend.emails.send({
       from: fromEmail,
       to: [email],
@@ -34,7 +31,6 @@ const sendOTPEmail = async (email, otp) => {
         </div>
       `
     });
-
     if (error) {
       console.error('Resend error:', error);
       return false;
@@ -50,12 +46,11 @@ const sendOTPEmail = async (email, otp) => {
 router.post('/register', async (req, res) => {
   const { email, firstName, lastName, phone, country } = req.body;
 
-  // Validation
   if (!email || !firstName || !lastName) {
     return res.status(400).json({ message: 'Email, first name, and last name are required.' });
   }
 
-  // Check if email already exists (and verified)
+  // Check if email already exists and verified
   const { data: existingUser, error: checkError } = await supabaseAdmin
     .from('users')
     .select('email, verified')
@@ -66,24 +61,27 @@ router.post('/register', async (req, res) => {
     if (existingUser.verified) {
       return res.status(409).json({ message: 'Email already registered.' });
     }
-    // If not verified, we allow re-sending OTP but we'll overwrite old OTP
   }
 
   // Generate OTP
   const otp = generateOTP();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-  // Store or update OTP in database
-  const { error: upsertError } = await supabaseAdmin
+  // --- FIX: Delete any existing OTP for this email, then insert ---
+  // Delete existing
+  await supabaseAdmin.from('otp_codes').delete().eq('email', email);
+
+  // Insert new OTP
+  const { error: insertError } = await supabaseAdmin
     .from('otp_codes')
-    .upsert({
+    .insert({
       email,
       code: otp,
       expires_at: expiresAt.toISOString()
-    }, { onConflict: 'email' });
+    });
 
-  if (upsertError) {
-    console.error('OTP upsert error:', upsertError);
+  if (insertError) {
+    console.error('OTP insert error:', insertError);
     return res.status(500).json({ message: 'Failed to generate OTP. Please try again.' });
   }
 
@@ -210,7 +208,6 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ message: 'Email and password are required.' });
   }
 
-  // Fetch user
   const { data: user, error } = await supabaseAdmin
     .from('users')
     .select('id, email, first_name, last_name, password_hash, verified')
@@ -225,13 +222,11 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ message: 'Please verify your email first.' });
   }
 
-  // Verify password
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
     return res.status(401).json({ message: 'Invalid email or password.' });
   }
 
-  // Generate JWT
   const token = jwt.sign(
     { id: user.id, email: user.email },
     process.env.JWT_SECRET,
