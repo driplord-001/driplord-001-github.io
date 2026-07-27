@@ -3,10 +3,11 @@ const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { supabaseAdmin } = require('../supabase/client');
 
-// GET /api/transactions – fetch user transactions (optionally limit)
+// GET /api/transactions – fetch user transactions (optionally limited)
 router.get('/transactions', verifyToken, async (req, res) => {
   const userId = req.user.id;
   const { limit } = req.query;
+
   let query = supabaseAdmin
     .from('transactions')
     .select('*')
