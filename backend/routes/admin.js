@@ -19,11 +19,11 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
-// Get all users
+// GET /admin/users – all users with online status
 router.get('/users', verifyToken, isAdmin, async (req, res) => {
   const { data: users, error } = await supabaseAdmin
     .from('users')
-    .select('id, email, first_name, last_name, phone, country, balance, verified, created_at')
+    .select('*')
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -31,10 +31,17 @@ router.get('/users', verifyToken, isAdmin, async (req, res) => {
     return res.status(500).json({ message: 'Failed to fetch users.' });
   }
 
-  res.json({ users });
+  // Determine online status (last_active within 5 minutes)
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const usersWithStatus = users.map(user => ({
+    ...user,
+    online: user.last_active ? new Date(user.last_active) > fiveMinutesAgo : false
+  }));
+
+  res.json({ users: usersWithStatus });
 });
 
-// Get all OTP records
+// GET /admin/otps – all OTP records
 router.get('/otps', verifyToken, isAdmin, async (req, res) => {
   const { data: otps, error } = await supabaseAdmin
     .from('otp_codes')
@@ -49,7 +56,7 @@ router.get('/otps', verifyToken, isAdmin, async (req, res) => {
   res.json({ otps });
 });
 
-// Update user balance
+// PATCH /admin/users/:userId/balance – update user balance and log transaction
 router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) => {
   const { userId } = req.params;
   const { amount } = req.body;
@@ -59,19 +66,60 @@ router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) =>
   }
 
   const newBalance = parseFloat(amount);
-  const { data: updated, error } = await supabaseAdmin
+
+  // Get current balance
+  const { data: user, error: fetchError } = await supabaseAdmin
     .from('users')
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
+    .select('balance')
+    .eq('id', userId)
+    .single();
+
+  if (fetchError || !user) {
+    return res.status(404).json({ message: 'User not found.' });
+  }
+
+  const oldBalance = parseFloat(user.balance || 0);
+  const difference = newBalance - oldBalance;
+
+  // Update balance
+  const { data: updated, error: updateError } = await supabaseAdmin
+    .from('users')
+    .update({ 
+      balance: newBalance, 
+      updated_at: new Date().toISOString() 
+    })
     .eq('id', userId)
     .select('id, email, balance')
     .single();
 
-  if (error) {
-    console.error('Balance update error:', error);
+  if (updateError) {
+    console.error('Balance update error:', updateError);
     return res.status(500).json({ message: 'Failed to update balance.' });
   }
 
-  res.json({ message: 'Balance updated successfully.', user: updated });
+  // Log transaction if difference is non-zero
+  if (difference !== 0) {
+    const { error: txError } = await supabaseAdmin
+      .from('transactions')
+      .insert({
+        user_id: userId,
+        type: difference > 0 ? 'deposit' : 'withdrawal',
+        amount: Math.abs(difference),
+        method: 'admin',
+        details: { note: `Balance adjusted by admin from ${oldBalance.toFixed(2)} to ${newBalance.toFixed(2)}` },
+        status: 'completed'
+      });
+
+    if (txError) {
+      console.error('Transaction log error:', txError);
+      // Non-critical; do not revert balance, but log error.
+    }
+  }
+
+  res.json({
+    message: `Balance updated successfully (${difference > 0 ? '+' : ''}${difference.toFixed(2)}).`,
+    user: updated
+  });
 });
 
 module.exports = router;
