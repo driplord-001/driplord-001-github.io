@@ -3,45 +3,46 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { supabaseAdmin } = require('../supabase/client');
-const { Resend } = require('resend');
-
-const resend = new Resend(process.env.RESEND_API_KEY);
+const axios = require('axios');
 
 // ============================================================
-// HELPERS
+// Brevo Email Helper
 // ============================================================
-const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
-
-const sendOTPEmail = async (email, otp) => {
+const sendBrevoEmail = async (to, subject, htmlContent) => {
   try {
-    const fromEmail = process.env.RESEND_FROM_EMAIL || 'FX SMARTBULL <onboarding@resend.dev>';
-    const { data, error } = await resend.emails.send({
-      from: fromEmail,
-      to: [email],
-      subject: 'Your FX SMARTBULL Verification Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; background: #0A0A0A; color: #D4AF37; padding: 30px; border-radius: 12px; border: 1px solid #D4AF37;">
-          <h1 style="text-align: center;">FX SMARTBULL</h1>
-          <p style="color: #ffffff;">Hello,</p>
-          <p style="color: #ffffff;">Your verification code is:</p>
-          <div style="text-align: center; font-size: 36px; font-weight: bold; letter-spacing: 4px; background: rgba(212,175,55,0.1); padding: 16px; border-radius: 8px; border: 1px solid #D4AF37; color: #D4AF37;">
-            ${otp}
-          </div>
-          <p style="color: #ffffff; margin-top: 20px;">This code expires in 10 minutes.</p>
-          <p style="color: #ffffff;">If you didn't request this, please ignore this email.</p>
-        </div>
-      `
-    });
-    if (error) throw error;
-    return true;
-  } catch (err) {
-    console.error('Email send error:', err);
+    const apiKey = process.env.BREVO_API_KEY;
+    const fromEmail = process.env.BREVO_FROM_EMAIL || 'FX SMARTBULL <jimmydarts404@gmail.com>';
+    const fromAddress = fromEmail.split('<')[1]?.replace('>', '') || fromEmail;
+
+    const response = await axios.post(
+      'https://api.brevo.com/v3/smtp/email',
+      {
+        sender: { name: 'FX SMARTBULL', email: fromAddress },
+        to: [{ email: to }],
+        subject: subject,
+        htmlContent: htmlContent
+      },
+      {
+        headers: {
+          'api-key': apiKey,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    return response.status === 201 || response.status === 200;
+  } catch (error) {
+    console.error('Brevo email error:', error.response?.data || error.message);
     return false;
   }
 };
 
 // ============================================================
-// REGISTER – step 1: send OTP
+// OTP Generation
+// ============================================================
+const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+// ============================================================
+// REGISTER – Step 1: Send OTP
 // ============================================================
 router.post('/register', async (req, res) => {
   const { email, firstName, lastName, phone, country } = req.body;
@@ -65,7 +66,7 @@ router.post('/register', async (req, res) => {
   const otp = generateOTP();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-  // Delete existing OTP for this email
+  // Delete existing OTP
   await supabaseAdmin.from('otp_codes').delete().eq('email', email);
 
   // Insert new OTP
@@ -79,20 +80,38 @@ router.post('/register', async (req, res) => {
 
   if (insertError) {
     console.error('OTP insert error:', insertError);
-    return res.status(500).json({ message: 'Failed to generate OTP. Please try again.' });
+    return res.status(500).json({ message: 'Failed to generate OTP.' });
   }
 
-  // Send OTP email
-  const sent = await sendOTPEmail(email, otp);
+  // Send OTP via Brevo
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; background: #0A0A0A; color: #D4AF37; padding: 30px; border-radius: 16px; border: 1px solid #D4AF37;">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h1 style="color: #D4AF37; font-weight: 800; font-size: 28px; letter-spacing: 2px; margin: 0;">FX SMARTBULL</h1>
+        <hr style="border-color: rgba(212,175,55,0.2);" />
+      </div>
+      <p style="color: #ffffff; font-size: 16px;">Hello ${firstName},</p>
+      <p style="color: #ffffff;">Your verification code is:</p>
+      <div style="text-align: center; font-size: 40px; font-weight: bold; letter-spacing: 6px; background: rgba(212,175,55,0.08); padding: 18px; border-radius: 12px; border: 1px solid #D4AF37; color: #D4AF37; margin: 20px 0;">
+        ${otp}
+      </div>
+      <p style="color: #ffffff;">This code expires in <strong>10 minutes</strong>.</p>
+      <p style="color: #999; font-size: 14px;">If you didn't request this, please ignore this email.</p>
+      <hr style="border-color: rgba(212,175,55,0.1);" />
+      <p style="color: #666; font-size: 12px; text-align: center;">© 2026 FX SMARTBULL. All rights reserved.</p>
+    </div>
+  `;
+
+  const sent = await sendBrevoEmail(email, 'Your FX SMARTBULL Verification Code', htmlContent);
   if (!sent) {
-    return res.status(500).json({ message: 'Failed to send OTP email. Please try again later.' });
+    return res.status(500).json({ message: 'Failed to send OTP email. Please try again.' });
   }
 
   res.status(200).json({ message: 'OTP sent to your email.' });
 });
 
 // ============================================================
-// REGISTER – step 2: verify OTP and create account
+// REGISTER – Step 2: Verify OTP and create account
 // ============================================================
 router.post('/verify-otp', async (req, res) => {
   const { email, otp, firstName, lastName, phone, country, password } = req.body;
@@ -140,7 +159,6 @@ router.post('/verify-otp', async (req, res) => {
 
   let userId;
   if (existingUser && !existingUser.verified) {
-    // Update existing unverified user
     const { data: updated, error: updateError } = await supabaseAdmin
       .from('users')
       .update({
@@ -158,11 +176,10 @@ router.post('/verify-otp', async (req, res) => {
 
     if (updateError || !updated) {
       console.error('Update user error:', updateError);
-      return res.status(500).json({ message: 'Failed to update user. Please try again.' });
+      return res.status(500).json({ message: 'Failed to update user.' });
     }
     userId = updated.id;
   } else {
-    // Create new user
     const { data: newUser, error: createError } = await supabaseAdmin
       .from('users')
       .insert({
@@ -180,12 +197,11 @@ router.post('/verify-otp', async (req, res) => {
 
     if (createError || !newUser) {
       console.error('Create user error:', createError);
-      return res.status(500).json({ message: 'Failed to create account. Please try again.' });
+      return res.status(500).json({ message: 'Failed to create account.' });
     }
     userId = newUser.id;
   }
 
-  // Generate JWT
   const token = jwt.sign(
     { id: userId, email },
     process.env.JWT_SECRET,
@@ -209,7 +225,6 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ message: 'Email and password are required.' });
   }
 
-  // Fetch user
   const { data: user, error } = await supabaseAdmin
     .from('users')
     .select('id, email, first_name, last_name, password_hash, verified')
@@ -224,13 +239,11 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ message: 'Please verify your email first.' });
   }
 
-  // Verify password
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
     return res.status(401).json({ message: 'Invalid email or password.' });
   }
 
-  // Generate JWT
   const token = jwt.sign(
     { id: user.id, email: user.email },
     process.env.JWT_SECRET,
@@ -247,28 +260,6 @@ router.post('/login', async (req, res) => {
       lastName: user.last_name
     }
   });
-});
-
-// ============================================================
-// TEMPORARY – Fix admin password hash (REMOVE AFTER USE)
-// ============================================================
-router.post('/fix-admin', async (req, res) => {
-  try {
-    const email = 'admin@gmail.com';
-    const password = '123456';
-    const hash = await bcrypt.hash(password, 10);
-
-    const { error } = await supabaseAdmin
-      .from('users')
-      .update({ password_hash: hash })
-      .eq('email', email);
-
-    if (error) throw error;
-    res.json({ message: 'Admin password hash updated successfully. Try login now.' });
-  } catch (err) {
-    console.error('Admin fix error:', err);
-    res.status(500).json({ error: err.message });
-  }
 });
 
 module.exports = router;
