@@ -1,11 +1,14 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+
+// Import all route modules
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/user');
 const adminRoutes = require('./routes/admin');
 const withdrawRoutes = require('./routes/withdraw');
 const transactionsRoutes = require('./routes/transactions');
+const investRoutes = require('./routes/invest');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -52,11 +55,12 @@ app.use((req, res, next) => {
 // ============================================================
 // ROUTES
 // ============================================================
-app.use('/api', authRoutes);
-app.use('/api', userRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api', withdrawRoutes);
-app.use('/api', transactionsRoutes);
+app.use('/api', authRoutes);          // /api/login, /api/register, /api/verify-otp
+app.use('/api', userRoutes);          // /api/me, /api/update-profile
+app.use('/api/admin', adminRoutes);   // /api/admin/users, /api/admin/otps, /api/admin/users/:id/balance
+app.use('/api', withdrawRoutes);      // /api/withdraw
+app.use('/api', transactionsRoutes);  // /api/transactions
+app.use('/api', investRoutes);        // /api/invest, /api/investments
 
 // ============================================================
 // HEALTH CHECK
