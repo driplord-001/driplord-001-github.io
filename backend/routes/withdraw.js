@@ -1,10 +1,9 @@
-// routes/withdraw.js
 const express = require('express');
 const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { supabaseAdmin } = require('../supabase/client');
 
-// POST /api/withdraw
+// POST /api/withdraw – submit withdrawal request
 router.post('/withdraw', verifyToken, async (req, res) => {
   const { amount, method, details } = req.body;
   const userId = req.user.id;
@@ -34,7 +33,7 @@ router.post('/withdraw', verifyToken, async (req, res) => {
       return res.status(400).json({ message: 'Insufficient balance.' });
     }
 
-    // Deduct balance
+    // Deduct balance (immediate deduction for pending withdrawal)
     const newBalance = currentBalance - amount;
     const { error: updateError } = await supabaseAdmin
       .from('users')
@@ -46,33 +45,33 @@ router.post('/withdraw', verifyToken, async (req, res) => {
       return res.status(500).json({ message: 'Failed to update balance.' });
     }
 
-    // Record withdrawal (you need a 'withdrawals' table)
-    const { data: withdrawal, error: wdError } = await supabaseAdmin
-      .from('withdrawals')
+    // Record withdrawal in transactions table with status 'pending'
+    const { data: tx, error: txError } = await supabaseAdmin
+      .from('transactions')
       .insert({
         user_id: userId,
+        type: 'withdrawal',
         amount: amount,
         method: method,
         details: details,
-        status: 'pending',
-        created_at: new Date().toISOString()
+        status: 'pending'  // Admin can later change to 'completed' or 'failed'
       })
       .select('id')
       .single();
 
-    if (wdError) {
+    if (txError) {
       // Rollback balance
       await supabaseAdmin
         .from('users')
         .update({ balance: currentBalance })
         .eq('id', userId);
-      console.error('Withdrawal record error:', wdError);
+      console.error('Transaction record error:', txError);
       return res.status(500).json({ message: 'Failed to create withdrawal record.' });
     }
 
     res.status(201).json({
       message: 'Withdrawal submitted successfully.',
-      withdrawalId: withdrawal.id,
+      withdrawalId: tx.id,
       newBalance: newBalance
     });
   } catch (err) {
