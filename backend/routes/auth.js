@@ -7,10 +7,11 @@ const { Resend } = require('resend');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// ---------- Helper: generate 6-digit OTP ----------
+// ============================================================
+// HELPERS
+// ============================================================
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// ---------- Helper: send OTP email ----------
 const sendOTPEmail = async (email, otp) => {
   try {
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'FX SMARTBULL <onboarding@resend.dev>';
@@ -31,10 +32,7 @@ const sendOTPEmail = async (email, otp) => {
         </div>
       `
     });
-    if (error) {
-      console.error('Resend error:', error);
-      return false;
-    }
+    if (error) throw error;
     return true;
   } catch (err) {
     console.error('Email send error:', err);
@@ -42,7 +40,9 @@ const sendOTPEmail = async (email, otp) => {
   }
 };
 
-// ---------- Register step 1: send OTP ----------
+// ============================================================
+// REGISTER – step 1: send OTP
+// ============================================================
 router.post('/register', async (req, res) => {
   const { email, firstName, lastName, phone, country } = req.body;
 
@@ -50,25 +50,22 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ message: 'Email, first name, and last name are required.' });
   }
 
-  // Check if email already exists and verified
-  const { data: existingUser, error: checkError } = await supabaseAdmin
+  // Check if already verified
+  const { data: existing, error: checkError } = await supabaseAdmin
     .from('users')
     .select('email, verified')
     .eq('email', email)
     .maybeSingle();
 
-  if (existingUser) {
-    if (existingUser.verified) {
-      return res.status(409).json({ message: 'Email already registered.' });
-    }
+  if (existing && existing.verified) {
+    return res.status(409).json({ message: 'Email already registered.' });
   }
 
   // Generate OTP
   const otp = generateOTP();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-  // --- FIX: Delete any existing OTP for this email, then insert ---
-  // Delete existing
+  // Delete existing OTP for this email
   await supabaseAdmin.from('otp_codes').delete().eq('email', email);
 
   // Insert new OTP
@@ -94,7 +91,9 @@ router.post('/register', async (req, res) => {
   res.status(200).json({ message: 'OTP sent to your email.' });
 });
 
-// ---------- Register step 2: verify OTP and create account ----------
+// ============================================================
+// REGISTER – step 2: verify OTP and create account
+// ============================================================
 router.post('/verify-otp', async (req, res) => {
   const { email, otp, firstName, lastName, phone, country, password } = req.body;
 
@@ -200,7 +199,9 @@ router.post('/verify-otp', async (req, res) => {
   });
 });
 
-// ---------- Login ----------
+// ============================================================
+// LOGIN
+// ============================================================
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
@@ -208,6 +209,7 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ message: 'Email and password are required.' });
   }
 
+  // Fetch user
   const { data: user, error } = await supabaseAdmin
     .from('users')
     .select('id, email, first_name, last_name, password_hash, verified')
@@ -222,11 +224,13 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ message: 'Please verify your email first.' });
   }
 
+  // Verify password
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
     return res.status(401).json({ message: 'Invalid email or password.' });
   }
 
+  // Generate JWT
   const token = jwt.sign(
     { id: user.id, email: user.email },
     process.env.JWT_SECRET,
@@ -243,6 +247,38 @@ router.post('/login', async (req, res) => {
       lastName: user.last_name
     }
   });
+});
+
+// ============================================================
+// TEMPORARY – Create admin user (remove after use)
+// ============================================================
+router.post('/create-admin', async (req, res) => {
+  try {
+    const email = 'admin@gmail.com';
+    const password = '123456';
+    const hash = await bcrypt.hash(password, 10);
+
+    // Upsert admin
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .upsert({
+        email,
+        first_name: 'Admin',
+        last_name: 'User',
+        password_hash: hash,
+        verified: true,
+        balance: 10000,
+        created_at: new Date().toISOString()
+      }, { onConflict: 'email' })
+      .select('id')
+      .single();
+
+    if (error) throw error;
+    res.json({ message: 'Admin created/updated successfully', admin: data });
+  } catch (err) {
+    console.error('Admin creation error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
