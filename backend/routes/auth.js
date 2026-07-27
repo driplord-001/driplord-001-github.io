@@ -250,33 +250,23 @@ router.post('/login', async (req, res) => {
 });
 
 // ============================================================
-// TEMPORARY – Create admin user (remove after use)
+// TEMPORARY – Fix admin password hash (REMOVE AFTER USE)
 // ============================================================
-router.post('/create-admin', async (req, res) => {
+router.post('/fix-admin', async (req, res) => {
   try {
     const email = 'admin@gmail.com';
     const password = '123456';
     const hash = await bcrypt.hash(password, 10);
 
-    // Upsert admin
-    const { data, error } = await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('users')
-      .upsert({
-        email,
-        first_name: 'Admin',
-        last_name: 'User',
-        password_hash: hash,
-        verified: true,
-        balance: 10000,
-        created_at: new Date().toISOString()
-      }, { onConflict: 'email' })
-      .select('id')
-      .single();
+      .update({ password_hash: hash })
+      .eq('email', email);
 
     if (error) throw error;
-    res.json({ message: 'Admin created/updated successfully', admin: data });
+    res.json({ message: 'Admin password hash updated successfully. Try login now.' });
   } catch (err) {
-    console.error('Admin creation error:', err);
+    console.error('Admin fix error:', err);
     res.status(500).json({ error: err.message });
   }
 });
