@@ -4,7 +4,8 @@ const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/user');
 const adminRoutes = require('./routes/admin');
-const withdrawRoutes = require('./routes/withdraw'); // <-- NEW
+const withdrawRoutes = require('./routes/withdraw');
+const transactionsRoutes = require('./routes/transactions');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,13 +16,14 @@ const PORT = process.env.PORT || 3000;
 const allowedOrigins = [
   'http://localhost:5500',
   'http://localhost:3000',
-  'https://resplendent-platypus-de88a4.netlify.app',
-  'https://precious-cobbler-0a0716.netlify.app', // your current frontend
-  process.env.FRONTEND_URL
-].filter(Boolean);
+  'https://resplendent-platypus-de88a4.netlify.app',   // old frontend
+  'https://precious-cobbler-0a0716.netlify.app',       // current frontend
+  process.env.FRONTEND_URL                               // fallback from environment
+].filter(Boolean); // Remove undefined values
 
 app.use(cors({
   origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
@@ -41,7 +43,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Log incoming requests
+// Log all incoming requests (useful for debugging)
 app.use((req, res, next) => {
   console.log(`📡 ${req.method} ${req.url}`);
   next();
@@ -53,9 +55,12 @@ app.use((req, res, next) => {
 app.use('/api', authRoutes);
 app.use('/api', userRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api', withdrawRoutes); // <-- NEW withdrawal route
+app.use('/api', withdrawRoutes);
+app.use('/api', transactionsRoutes);
 
-// Health check endpoint
+// ============================================================
+// HEALTH CHECK
+// ============================================================
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -64,7 +69,9 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Catch-all for undefined routes
+// ============================================================
+// CATCH‑ALL FOR UNDEFINED ROUTES
+// ============================================================
 app.use((req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
