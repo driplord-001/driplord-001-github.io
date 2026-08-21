@@ -9,6 +9,7 @@ const adminRoutes = require('./routes/admin');
 const withdrawRoutes = require('./routes/withdraw');
 const transactionsRoutes = require('./routes/transactions');
 const investRoutes = require('./routes/invest');
+const supportRoutes = require('./routes/support'); // ✅ NEW
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://resplendent-platypus-de88a4.netlify.app',   // old frontend
   'https://precious-cobbler-0a0716.netlify.app',       // current frontend
+  'https://driplord-001-github-io.onrender.com',       // Render static frontend
   process.env.FRONTEND_URL                               // fallback from environment
 ].filter(Boolean); // Remove undefined values
 
@@ -61,6 +63,7 @@ app.use('/api/admin', adminRoutes);   // /api/admin/users, /api/admin/otps, /api
 app.use('/api', withdrawRoutes);      // /api/withdraw
 app.use('/api', transactionsRoutes);  // /api/transactions
 app.use('/api', investRoutes);        // /api/invest, /api/investments
+app.use('/api', supportRoutes);       // /api/support/*, /api/admin/support/*  ✅ NEW
 
 // ============================================================
 // HEALTH CHECK
@@ -86,4 +89,5 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`✅ Allowed origins: ${allowedOrigins.join(', ')}`);
+  console.log(`📦 Routes loaded: auth, user, admin, withdraw, transactions, invest, support`);
 });
