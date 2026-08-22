@@ -1,74 +1,148 @@
-require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const router = express.Router();
+const { verifyToken } = require('../middleware/auth');
+const { supabaseAdmin } = require('../supabase/client');
 
-// Import all route modules
-const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/user');
-const adminRoutes = require('./routes/admin');
-const withdrawRoutes = require('./routes/withdraw');
-const transactionsRoutes = require('./routes/transactions');
-const investRoutes = require('./routes/invest');
-const supportRoutes = require('./routes/support');
+// USER: Send a support message
+router.post('/support/send', verifyToken, async (req, res) => {
+  const { message } = req.body;
+  const userId = req.user.id;
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+  if (!message || message.trim().length < 3) {
+    return res.status(400).json({ message: 'Message must be at least 3 characters.' });
+  }
 
-// ============================================================
-// CORS CONFIGURATION – Allow ALL origins (no restrictions)
-// ============================================================
-app.use(cors({
-  origin: '*',  // Allow any domain to access your API
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+  const { data: user, error: userError } = await supabaseAdmin
+    .from('users')
+    .select('email')
+    .eq('id', userId)
+    .single();
 
-// ============================================================
-// MIDDLEWARE
-// ============================================================
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+  if (userError || !user) {
+    return res.status(404).json({ message: 'User not found.' });
+  }
 
-// Log all incoming requests
-app.use((req, res, next) => {
-  console.log(`📡 ${req.method} ${req.url} from ${req.headers.origin || 'unknown'}`);
-  next();
+  const { data, error } = await supabaseAdmin
+    .from('support_messages')
+    .insert({
+      user_id: userId,
+      email: user.email,
+      message: message.trim(),
+      is_read: false
+    })
+    .select('id, created_at')
+    .single();
+
+  if (error) {
+    console.error('Support message error:', error);
+    return res.status(500).json({ message: 'Failed to send message.' });
+  }
+
+  res.status(201).json({ message: 'Message sent successfully.', data });
 });
 
-// ============================================================
-// ROUTES
-// ============================================================
-app.use('/api', authRoutes);
-app.use('/api', userRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api', withdrawRoutes);
-app.use('/api', transactionsRoutes);
-app.use('/api', investRoutes);
-app.use('/api', supportRoutes);
+// USER: Get user's own support messages
+router.get('/support/my-messages', verifyToken, async (req, res) => {
+  const userId = req.user.id;
 
-// ============================================================
-// HEALTH CHECK
-// ============================================================
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
-  });
+  const { data, error } = await supabaseAdmin
+    .from('support_messages')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Fetch my messages error:', error);
+    return res.status(500).json({ message: 'Failed to fetch messages.' });
+  }
+
+  await supabaseAdmin
+    .from('support_messages')
+    .update({ is_read: true })
+    .eq('user_id', userId)
+    .eq('is_read', false);
+
+  res.json({ messages: data });
 });
 
-// ============================================================
-// CATCH‑ALL FOR UNDEFINED ROUTES
-// ============================================================
-app.use((req, res) => {
-  res.status(404).json({ message: 'Route not found' });
+// ADMIN: Get all support messages
+router.get('/admin/support/messages', verifyToken, async (req, res) => {
+  const { data: user, error: adminCheck } = await supabaseAdmin
+    .from('users')
+    .select('email')
+    .eq('id', req.user.id)
+    .single();
+
+  if (adminCheck || !user || user.email !== 'admin@gmail.com') {
+    return res.status(403).json({ message: 'Admin access required.' });
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('support_messages')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Admin messages error:', error);
+    return res.status(500).json({ message: 'Failed to fetch messages.' });
+  }
+
+  const userIds = [...new Set(data.map(m => m.user_id))];
+  const { data: users, error: userError } = await supabaseAdmin
+    .from('users')
+    .select('id, first_name, last_name, email')
+    .in('id', userIds);
+
+  const userMap = {};
+  if (!userError && users) {
+    users.forEach(u => {
+      userMap[u.id] = `${u.first_name} ${u.last_name} (${u.email})`;
+    });
+  }
+
+  const messagesWithUser = data.map(m => ({
+    ...m,
+    userDisplay: userMap[m.user_id] || m.email
+  }));
+
+  res.json({ messages: messagesWithUser });
 });
 
-// ============================================================
-// START SERVER
-// ============================================================
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌐 CORS: All origins allowed`);
-  console.log(`📦 Routes loaded: auth, user, admin, withdraw, transactions, invest, support`);
+// ADMIN: Reply to a support message
+router.post('/admin/support/reply', verifyToken, async (req, res) => {
+  const { messageId, reply } = req.body;
+
+  const { data: user, error: adminCheck } = await supabaseAdmin
+    .from('users')
+    .select('email')
+    .eq('id', req.user.id)
+    .single();
+
+  if (adminCheck || !user || user.email !== 'admin@gmail.com') {
+    return res.status(403).json({ message: 'Admin access required.' });
+  }
+
+  if (!messageId || !reply || reply.trim().length < 1) {
+    return res.status(400).json({ message: 'Reply is required.' });
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('support_messages')
+    .update({
+      reply: reply.trim(),
+      updated_at: new Date().toISOString(),
+      is_read: true
+    })
+    .eq('id', messageId)
+    .select('id, user_id, email, message, reply')
+    .single();
+
+  if (error) {
+    console.error('Reply error:', error);
+    return res.status(500).json({ message: 'Failed to send reply.' });
+  }
+
+  res.json({ message: 'Reply sent successfully.', data });
 });
+
+module.exports = router;
