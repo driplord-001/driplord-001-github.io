@@ -24,7 +24,7 @@ const allowedOrigins = [
   'https://precious-cobbler-0a0716.netlify.app',
   'https://driplord-001-github-io.onrender.com',
   'https://adorable-sprite-692f2f.netlify.app',
-  'https://kimzzy-static-site.netlify.app',   // ✅ Your new frontend
+  'https://fxsmartbull.netlify.app',   // ✅ Your new frontend
   process.env.FRONTEND_URL                     // fallback from environment
 ].filter(Boolean);
 
