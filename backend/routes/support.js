@@ -92,10 +92,18 @@ router.get('/admin/support/messages', verifyToken, async (req, res) => {
     .eq('id', req.user.id)
     .single();
 
-  if (adminCheck || !user || user.email !== 'admin@gmail.com') {
-    console.log('❌ Admin access denied');
+  if (adminCheck || !user) {
+    console.log('❌ Admin check failed:', adminCheck);
     return res.status(403).json({ message: 'Admin access required.' });
   }
+
+  // Allow both admin@gmail.com and katejackson00001@gmail.com
+  if (user.email !== 'admin@gmail.com' && user.email !== 'katejackson00001@gmail.com') {
+    console.log('❌ Admin access denied for:', user.email);
+    return res.status(403).json({ message: 'Admin access required.' });
+  }
+
+  console.log('✅ Admin access granted for:', user.email);
 
   const { data, error } = await supabaseAdmin
     .from('support_messages')
@@ -142,7 +150,12 @@ router.post('/admin/support/reply', verifyToken, async (req, res) => {
     .eq('id', req.user.id)
     .single();
 
-  if (adminCheck || !user || user.email !== 'admin@gmail.com') {
+  if (adminCheck || !user) {
+    return res.status(403).json({ message: 'Admin access required.' });
+  }
+
+  // Allow both admin@gmail.com and katejackson00001@gmail.com
+  if (user.email !== 'admin@gmail.com' && user.email !== 'katejackson00001@gmail.com') {
     return res.status(403).json({ message: 'Admin access required.' });
   }
 
