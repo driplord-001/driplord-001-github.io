@@ -21,7 +21,7 @@ const allowedOrigins = [
   'http://localhost:5500',
   'http://localhost:3000',
   'https://resplendent-platypus-de88a4.netlify.app',   // old frontend
-  'https://precious-cobbler-0a0716.netlify.app',       // old frontend
+  'https://fxsmartbull.netlify.app',       // old frontend
   'https://driplord-001-github-io.onrender.com',       // Render static
   'https://adorable-sprite-692f2f.netlify.app',        // ✅ NEW frontend
   process.env.FRONTEND_URL                              // fallback from environment
