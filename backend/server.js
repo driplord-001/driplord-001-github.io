@@ -15,45 +15,21 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ============================================================
-// CORS – Allow your frontend explicitly
+// FORCE CORS HEADERS – Must be FIRST (BEFORE any routes)
 // ============================================================
-const allowedOrigins = [
-  'http://localhost:5500',
-  'http://localhost:3000',
-  'https://fxsmartbull.netlify.app',      // ✅ Your frontend
-  'https://kimzzy-static-site.netlify.app',
-  'https://driplord-001-github-io.onrender.com',
-  process.env.FRONTEND_URL
-].filter(Boolean);
-
-// 1. Use the cors middleware
-app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      console.log('❌ Blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-// 2. MANUAL HEADER MIDDLEWARE – Forces CORS headers for ALL responses
 app.use((req, res, next) => {
-  // Allow your frontend origin explicitly
+  // Allow your frontend
   res.header('Access-Control-Allow-Origin', 'https://fxsmartbull.netlify.app');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.header('Access-Control-Allow-Credentials', 'true');
 
-  // Handle preflight OPTIONS requests
+  // Handle preflight OPTIONS requests immediately
   if (req.method === 'OPTIONS') {
+    console.log('✅ OPTIONS preflight handled for:', req.url);
     return res.sendStatus(200);
   }
+
   next();
 });
 
@@ -66,7 +42,9 @@ app.use(express.urlencoded({ extended: true }));
 // Logging
 app.use((req, res, next) => {
   console.log(`📡 ${req.method} ${req.url}`);
-  if (req.body && Object.keys(req.body).length) console.log('📦 Body:', req.body);
+  if (req.body && Object.keys(req.body).length) {
+    console.log('📦 Body:', req.body);
+  }
   next();
 });
 
@@ -134,6 +112,5 @@ app.use((req, res) => {
 // ============================================================
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`✅ Allowed origins: ${allowedOrigins.join(', ')}`);
   console.log(`📦 Routes loaded: auth, user, admin, withdraw, transactions, invest, support`);
 });
