@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 
-// Import all route modules
+// Import route modules
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/user');
 const adminRoutes = require('./routes/admin');
@@ -15,24 +15,20 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ============================================================
-// CORS CONFIGURATION – Allow your frontend domains
+// CORS – Allow your frontend explicitly
 // ============================================================
 const allowedOrigins = [
   'http://localhost:5500',
   'http://localhost:3000',
-  'https://resplendent-platypus-de88a4.netlify.app',
-  'https://precious-cobbler-0a0716.netlify.app',
-  'https://driplord-001-github-io.onrender.com',
-  'https://adorable-sprite-692f2f.netlify.app',
+  'https://fxsmartbull.netlify.app',      // ✅ Your frontend
   'https://kimzzy-static-site.netlify.app',
-  'https://fxsmartbull.netlify.app',   // ✅ ADDED – Your frontend
+  'https://driplord-001-github-io.onrender.com',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
-// CORS Middleware
+// 1. Use the cors middleware
 app.use(cors({
   origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
@@ -46,46 +42,45 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// 2. MANUAL HEADER MIDDLEWARE – Forces CORS headers for ALL responses
+app.use((req, res, next) => {
+  // Allow your frontend origin explicitly
+  res.header('Access-Control-Allow-Origin', 'https://fxsmartbull.netlify.app');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+
+  // Handle preflight OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 // ============================================================
 // MIDDLEWARE
 // ============================================================
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Log all incoming requests
+// Logging
 app.use((req, res, next) => {
   console.log(`📡 ${req.method} ${req.url}`);
-  if (req.body && Object.keys(req.body).length) {
-    console.log('📦 Body:', req.body);
-  }
+  if (req.body && Object.keys(req.body).length) console.log('📦 Body:', req.body);
   next();
 });
 
 // ============================================================
-// DEBUG / DIAGNOSTIC ENDPOINTS
+// DEBUG ENDPOINTS
 // ============================================================
-
-// 1. Basic debug – returns request info and tests CORS
 app.get('/api/debug', (req, res) => {
   res.json({
     message: 'Backend is reachable!',
-    headers: req.headers,
     origin: req.headers.origin,
-    method: req.method,
-    url: req.url,
     timestamp: new Date().toISOString()
   });
 });
 
-// Handle OPTIONS for CORS preflight
-app.options('/api/debug', (req, res) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.sendStatus(200);
-});
-
-// 2. Check if support_messages table exists
 app.get('/api/check-table', async (req, res) => {
   try {
     const { supabaseAdmin } = require('./supabase/client');
@@ -93,67 +88,52 @@ app.get('/api/check-table', async (req, res) => {
       .from('support_messages')
       .select('id')
       .limit(1);
-    if (error) {
-      return res.json({ exists: false, error: error.message });
-    }
+    if (error) return res.json({ exists: false, error: error.message });
     res.json({ exists: true, data });
   } catch (err) {
     res.json({ exists: false, error: err.message });
   }
 });
 
-// 3. Environment check
 app.get('/api/env-check', (req, res) => {
-  const envStatus = {
+  res.json({
     SUPABASE_URL: !!process.env.SUPABASE_URL,
-    SUPABASE_ANON_KEY: !!process.env.SUPABASE_ANON_KEY,
-    SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     JWT_SECRET: !!process.env.JWT_SECRET,
-    BREVO_API_KEY: !!process.env.BREVO_API_KEY,
-    BREVO_FROM_EMAIL: !!process.env.BREVO_FROM_EMAIL,
-    FRONTEND_URL: process.env.FRONTEND_URL || 'not set',
-    NODE_ENV: process.env.NODE_ENV || 'development'
-  };
-  res.json(envStatus);
+    FRONTEND_URL: process.env.FRONTEND_URL || 'not set'
+  });
 });
 
 // ============================================================
 // ROUTES
 // ============================================================
-app.use('/api', authRoutes);          // /api/login, /api/register, /api/verify-otp
-app.use('/api', userRoutes);          // /api/me, /api/update-profile
-app.use('/api/admin', adminRoutes);   // /api/admin/users, /api/admin/otps, /api/admin/users/:id/balance
-app.use('/api', withdrawRoutes);      // /api/withdraw
-app.use('/api', transactionsRoutes);  // /api/transactions
-app.use('/api', investRoutes);        // /api/invest, /api/investments
-app.use('/api', supportRoutes);       // /api/support/*, /api/admin/support/*
+app.use('/api', authRoutes);
+app.use('/api', userRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api', withdrawRoutes);
+app.use('/api', transactionsRoutes);
+app.use('/api', investRoutes);
+app.use('/api', supportRoutes);
 
 // ============================================================
-// HEALTH CHECK
+// HEALTH
 // ============================================================
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
-  });
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // ============================================================
-// CATCH‑ALL FOR UNDEFINED ROUTES
+// 404 HANDLER
 // ============================================================
 app.use((req, res) => {
-  console.log('❌ 404 - Route not found:', req.method, req.url);
+  console.log('❌ 404:', req.method, req.url);
   res.status(404).json({ message: 'Route not found' });
 });
 
 // ============================================================
-// START SERVER
+// START
 // ============================================================
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`✅ Allowed origins: ${allowedOrigins.join(', ')}`);
   console.log(`📦 Routes loaded: auth, user, admin, withdraw, transactions, invest, support`);
-  console.log(`🔧 Debug endpoints: /api/debug, /api/check-table, /api/env-check`);
-  console.log(`🩺 Health: /api/health`);
 });
