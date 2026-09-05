@@ -27,24 +27,26 @@ const isAdmin = async (req, res, next) => {
 // ============================================================
 router.get('/users', verifyToken, isAdmin, async (req, res) => {
   console.log('📥 Fetching all users...');
-  const { data: users, error } = await supabaseAdmin
-    .from('users')
-    .select('*')
-    .order('created_at', { ascending: false });
+  try {
+    const { data: users, error } = await supabaseAdmin
+      .from('users')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Admin users error:', error);
-    return res.status(500).json({ message: 'Failed to fetch users.' });
+    if (error) throw error;
+
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const usersWithStatus = users.map(user => ({
+      ...user,
+      online: user.last_active ? new Date(user.last_active) > fiveMinutesAgo : false
+    }));
+
+    console.log(`✅ Found ${usersWithStatus.length} users`);
+    res.json({ users: usersWithStatus });
+  } catch (err) {
+    console.error('Admin users error:', err);
+    res.status(500).json({ message: 'Failed to fetch users.' });
   }
-
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-  const usersWithStatus = users.map(user => ({
-    ...user,
-    online: user.last_active ? new Date(user.last_active) > fiveMinutesAgo : false
-  }));
-
-  console.log(`✅ Found ${usersWithStatus.length} users`);
-  res.json({ users: usersWithStatus });
 });
 
 // ============================================================
@@ -52,18 +54,19 @@ router.get('/users', verifyToken, isAdmin, async (req, res) => {
 // ============================================================
 router.get('/otps', verifyToken, isAdmin, async (req, res) => {
   console.log('📥 Fetching all OTPs...');
-  const { data: otps, error } = await supabaseAdmin
-    .from('otp_codes')
-    .select('*')
-    .order('created_at', { ascending: false });
+  try {
+    const { data: otps, error } = await supabaseAdmin
+      .from('otp_codes')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Admin OTPs error:', error);
-    return res.status(500).json({ message: 'Failed to fetch OTPs.' });
+    if (error) throw error;
+    console.log(`✅ Found ${otps.length} OTPs`);
+    res.json({ otps });
+  } catch (err) {
+    console.error('Admin OTPs error:', err);
+    res.status(500).json({ message: 'Failed to fetch OTPs.' });
   }
-
-  console.log(`✅ Found ${otps.length} OTPs`);
-  res.json({ otps });
 });
 
 // ============================================================
@@ -78,52 +81,50 @@ router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) =>
   }
 
   const newBalance = parseFloat(amount);
+  try {
+    const { data: user, error: fetchError } = await supabaseAdmin
+      .from('users')
+      .select('balance')
+      .eq('id', userId)
+      .single();
 
-  const { data: user, error: fetchError } = await supabaseAdmin
-    .from('users')
-    .select('balance')
-    .eq('id', userId)
-    .single();
+    if (fetchError || !user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
 
-  if (fetchError || !user) {
-    return res.status(404).json({ message: 'User not found.' });
+    const oldBalance = parseFloat(user.balance || 0);
+    const difference = newBalance - oldBalance;
+
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('users')
+      .update({ balance: newBalance, updated_at: new Date().toISOString() })
+      .eq('id', userId)
+      .select('id, email, balance')
+      .single();
+
+    if (updateError) throw updateError;
+
+    if (difference !== 0) {
+      await supabaseAdmin
+        .from('transactions')
+        .insert({
+          user_id: userId,
+          type: difference > 0 ? 'deposit' : 'withdrawal',
+          amount: Math.abs(difference),
+          method: 'admin',
+          details: { note: `Balance adjusted by admin from ${oldBalance.toFixed(2)} to ${newBalance.toFixed(2)}` },
+          status: 'completed'
+        });
+    }
+
+    res.json({
+      message: `Balance updated successfully (${difference > 0 ? '+' : ''}${difference.toFixed(2)}).`,
+      user: updated
+    });
+  } catch (err) {
+    console.error('Balance update error:', err);
+    res.status(500).json({ message: 'Failed to update balance.' });
   }
-
-  const oldBalance = parseFloat(user.balance || 0);
-  const difference = newBalance - oldBalance;
-
-  const { data: updated, error: updateError } = await supabaseAdmin
-    .from('users')
-    .update({ 
-      balance: newBalance, 
-      updated_at: new Date().toISOString() 
-    })
-    .eq('id', userId)
-    .select('id, email, balance')
-    .single();
-
-  if (updateError) {
-    console.error('Balance update error:', updateError);
-    return res.status(500).json({ message: 'Failed to update balance.' });
-  }
-
-  if (difference !== 0) {
-    await supabaseAdmin
-      .from('transactions')
-      .insert({
-        user_id: userId,
-        type: difference > 0 ? 'deposit' : 'withdrawal',
-        amount: Math.abs(difference),
-        method: 'admin',
-        details: { note: `Balance adjusted by admin from ${oldBalance.toFixed(2)} to ${newBalance.toFixed(2)}` },
-        status: 'completed'
-      });
-  }
-
-  res.json({
-    message: `Balance updated successfully (${difference > 0 ? '+' : ''}${difference.toFixed(2)}).`,
-    user: updated
-  });
 });
 
 // ============================================================
@@ -131,20 +132,21 @@ router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) =>
 // ============================================================
 router.get('/transactions/pending', verifyToken, isAdmin, async (req, res) => {
   console.log('📥 Fetching pending withdrawals...');
-  const { data, error } = await supabaseAdmin
-    .from('transactions')
-    .select('*, users(email, first_name, last_name)')
-    .eq('type', 'withdrawal')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('transactions')
+      .select('*, users(email, first_name, last_name)')
+      .eq('type', 'withdrawal')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Fetch pending withdrawals error:', error);
-    return res.status(500).json({ message: 'Failed to fetch pending withdrawals.' });
+    if (error) throw error;
+    console.log(`✅ Found ${data.length} pending withdrawals`);
+    res.json({ transactions: data });
+  } catch (err) {
+    console.error('Fetch pending withdrawals error:', err);
+    res.status(500).json({ message: 'Failed to fetch pending withdrawals.' });
   }
-
-  console.log(`✅ Found ${data.length} pending withdrawals`);
-  res.json({ transactions: data });
 });
 
 // ============================================================
@@ -152,18 +154,19 @@ router.get('/transactions/pending', verifyToken, isAdmin, async (req, res) => {
 // ============================================================
 router.get('/transactions/all', verifyToken, isAdmin, async (req, res) => {
   console.log('📥 Fetching all transactions...');
-  const { data, error } = await supabaseAdmin
-    .from('transactions')
-    .select('*, users(email, first_name, last_name)')
-    .order('created_at', { ascending: false });
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('transactions')
+      .select('*, users(email, first_name, last_name)')
+      .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Fetch all transactions error:', error);
-    return res.status(500).json({ message: 'Failed to fetch transactions.' });
+    if (error) throw error;
+    console.log(`✅ Found ${data.length} total transactions`);
+    res.json({ transactions: data });
+  } catch (err) {
+    console.error('Fetch all transactions error:', err);
+    res.status(500).json({ message: 'Failed to fetch transactions.' });
   }
-
-  console.log(`✅ Found ${data.length} total transactions`);
-  res.json({ transactions: data });
 });
 
 // ============================================================
@@ -179,7 +182,6 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
   }
 
   try {
-    // Get transaction with user details
     const { data: transaction, error: fetchError } = await supabaseAdmin
       .from('transactions')
       .select('*, users(email, first_name, last_name)')
@@ -190,7 +192,6 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
       return res.status(404).json({ message: 'Transaction not found.' });
     }
 
-    // Update status
     const updates = {
       status,
       updated_at: new Date().toISOString(),
@@ -222,7 +223,6 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
       message: `Transaction status updated to ${status}`,
       transaction: updated
     });
-
   } catch (err) {
     console.error('Admin status update error:', err);
     res.status(500).json({ message: 'Internal server error.' });
@@ -230,7 +230,7 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
 });
 
 // ============================================================
-// EMAIL HELPER
+// EMAIL HELPER – FXSmartbull branding
 // ============================================================
 const sendTransactionStatusEmail = async (transaction) => {
   try {
@@ -239,25 +239,25 @@ const sendTransactionStatusEmail = async (transaction) => {
 
     const statusMessages = {
       pending: {
-        subject: '⏳ Withdrawal Pending Review – Cresta Markets',
+        subject: '⏳ Withdrawal Pending Review – FXSmartbull',
         color: '#f59e0b',
         icon: '⏳',
         message: 'Your withdrawal request is now pending admin review.'
       },
       completed: {
-        subject: '✅ Withdrawal Completed – Cresta Markets',
+        subject: '✅ Withdrawal Completed – FXSmartbull',
         color: '#00C853',
         icon: '✅',
         message: 'Your withdrawal has been successfully processed and funds have been sent.'
       },
       failed: {
-        subject: '❌ Withdrawal Failed – Cresta Markets',
+        subject: '❌ Withdrawal Failed – FXSmartbull',
         color: '#FF3D57',
         icon: '❌',
         message: 'Your withdrawal request could not be processed. Please contact support.'
       },
       cancelled: {
-        subject: '🚫 Withdrawal Cancelled – Cresta Markets',
+        subject: '🚫 Withdrawal Cancelled – FXSmartbull',
         color: '#f59e0b',
         icon: '🚫',
         message: 'Your withdrawal request has been cancelled.'
@@ -275,55 +275,55 @@ const sendTransactionStatusEmail = async (transaction) => {
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; background: #0A0A0A; color: #fff; padding: 30px; border-radius: 16px; border: 1px solid ${statusInfo.color};">
         <div style="text-align: center; margin-bottom: 24px;">
-          <h1 style="color: ${statusInfo.color}; font-weight: 800; font-size: 28px; letter-spacing: 2px; margin: 0;">Cresta Markets</h1>
-          <hr style="border-color: rgba(59,130,246,0.2);" />
+          <h1 style="color: ${statusInfo.color}; font-weight: 800; font-size: 28px; letter-spacing: 2px; margin: 0;">FXSmartbull</h1>
+          <hr style="border-color: rgba(212,175,55,0.2);" />
         </div>
         <h2 style="color: ${statusInfo.color}; margin-top: 0;">${statusInfo.icon} Withdrawal ${status.charAt(0).toUpperCase() + status.slice(1)}</h2>
         <p style="color: #ddd;">Hello ${user?.first_name || 'Trader'},</p>
         <p style="color: #ddd;">${statusInfo.message}</p>
         <table style="width: 100%; border-collapse: collapse; margin: 16px 0; color: #fff;">
-          <tr style="border-bottom: 1px solid rgba(59,130,246,0.2);">
+          <tr style="border-bottom: 1px solid rgba(212,175,55,0.2);">
             <td style="padding: 8px 0; color: #aaa;">Amount</td>
             <td style="padding: 8px 0; text-align: right; font-weight: 600; color: ${statusInfo.color};">$${parseFloat(amount).toFixed(2)}</td>
           </tr>
-          <tr style="border-bottom: 1px solid rgba(59,130,246,0.2);">
+          <tr style="border-bottom: 1px solid rgba(212,175,55,0.2);">
             <td style="padding: 8px 0; color: #aaa;">Method</td>
             <td style="padding: 8px 0; text-align: right; font-weight: 600;">${methodDisplay}</td>
           </tr>
-          <tr style="border-bottom: 1px solid rgba(59,130,246,0.2);">
+          <tr style="border-bottom: 1px solid rgba(212,175,55,0.2);">
             <td style="padding: 8px 0; color: #aaa;">Withdrawal ID</td>
             <td style="padding: 8px 0; text-align: right; font-weight: 600;">#${id}</td>
           </tr>
-          <tr style="border-bottom: 1px solid rgba(59,130,246,0.2);">
+          <tr style="border-bottom: 1px solid rgba(212,175,55,0.2);">
             <td style="padding: 8px 0; color: #aaa;">Status</td>
             <td style="padding: 8px 0; text-align: right; font-weight: 600; color: ${statusInfo.color};">${status.toUpperCase()}</td>
           </tr>
-          <tr style="border-bottom: 1px solid rgba(59,130,246,0.2);">
+          <tr style="border-bottom: 1px solid rgba(212,175,55,0.2);">
             <td style="padding: 8px 0; color: #aaa;">Details</td>
             <td style="padding: 8px 0; text-align: right; font-size: 13px; color: #ccc;">${detailSummary}</td>
           </tr>
           ${admin_notes ? `
-          <tr style="border-bottom: 1px solid rgba(59,130,246,0.2);">
+          <tr style="border-bottom: 1px solid rgba(212,175,55,0.2);">
             <td style="padding: 8px 0; color: #aaa;">Admin Notes</td>
             <td style="padding: 8px 0; text-align: right; font-size: 13px; color: #f59e0b;">${admin_notes}</td>
           </tr>
           ` : ''}
         </table>
         <p style="color: #ddd;">If you have any questions, please contact our support team.</p>
-        <hr style="border-color: rgba(59,130,246,0.1);" />
+        <hr style="border-color: rgba(212,175,55,0.1);" />
         <p style="color: #666; font-size: 12px; text-align: center;">This is an automated message. Do not reply.</p>
-        <p style="color: #666; font-size: 12px; text-align: center;">© 2026 Cresta Markets. All rights reserved.</p>
+        <p style="color: #666; font-size: 12px; text-align: center;">© 2026 FXSmartbull. All rights reserved.</p>
       </div>
     `;
 
     const apiKey = process.env.BREVO_API_KEY;
-    const fromEmail = process.env.BREVO_FROM_EMAIL || 'Cresta Markets <jimmydarts404@gmail.com>';
+    const fromEmail = process.env.BREVO_FROM_EMAIL || 'FXSmartbull <jimmydarts404@gmail.com>';
     const fromAddress = fromEmail.split('<')[1]?.replace('>', '') || fromEmail;
 
     await axios.post(
       'https://api.brevo.com/v3/smtp/email',
       {
-        sender: { name: 'Cresta Markets', email: fromAddress },
+        sender: { name: 'FXSmartbull', email: fromAddress },
         to: [{ email: user.email }],
         subject: statusInfo.subject,
         htmlContent: emailHtml
