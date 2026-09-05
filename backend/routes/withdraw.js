@@ -3,7 +3,6 @@ const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { supabaseAdmin } = require('../supabase/client');
 
-// POST /api/withdraw – NO EMAIL
 router.post('/withdraw', verifyToken, async (req, res) => {
   const { amount, method, details } = req.body;
   const userId = req.user.id;
