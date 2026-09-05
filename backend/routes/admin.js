@@ -4,7 +4,9 @@ const { verifyToken } = require('../middleware/auth');
 const { supabaseAdmin } = require('../supabase/client');
 const axios = require('axios');
 
-// Admin middleware
+// ============================================================
+// Admin Middleware
+// ============================================================
 const isAdmin = async (req, res, next) => {
   const { data: user, error } = await supabaseAdmin
     .from('users')
@@ -20,11 +22,115 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
-// ----- Existing endpoints: /users, /otps, /users/:userId/balance (keep as before) -----
-// I'm not repeating them here; they are the same as the previous full version.
+// ============================================================
+// GET /admin/users – All users with online status
+// ============================================================
+router.get('/users', verifyToken, isAdmin, async (req, res) => {
+  console.log('📥 Fetching all users...');
+  const { data: users, error } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .order('created_at', { ascending: false });
 
-// GET /admin/transactions/pending – pending withdrawals
+  if (error) {
+    console.error('Admin users error:', error);
+    return res.status(500).json({ message: 'Failed to fetch users.' });
+  }
+
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const usersWithStatus = users.map(user => ({
+    ...user,
+    online: user.last_active ? new Date(user.last_active) > fiveMinutesAgo : false
+  }));
+
+  console.log(`✅ Found ${usersWithStatus.length} users`);
+  res.json({ users: usersWithStatus });
+});
+
+// ============================================================
+// GET /admin/otps – All OTP records
+// ============================================================
+router.get('/otps', verifyToken, isAdmin, async (req, res) => {
+  console.log('📥 Fetching all OTPs...');
+  const { data: otps, error } = await supabaseAdmin
+    .from('otp_codes')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Admin OTPs error:', error);
+    return res.status(500).json({ message: 'Failed to fetch OTPs.' });
+  }
+
+  console.log(`✅ Found ${otps.length} OTPs`);
+  res.json({ otps });
+});
+
+// ============================================================
+// PATCH /admin/users/:userId/balance – Update balance
+// ============================================================
+router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { amount } = req.body;
+
+  if (amount === undefined || isNaN(parseFloat(amount))) {
+    return res.status(400).json({ message: 'Valid amount is required.' });
+  }
+
+  const newBalance = parseFloat(amount);
+
+  const { data: user, error: fetchError } = await supabaseAdmin
+    .from('users')
+    .select('balance')
+    .eq('id', userId)
+    .single();
+
+  if (fetchError || !user) {
+    return res.status(404).json({ message: 'User not found.' });
+  }
+
+  const oldBalance = parseFloat(user.balance || 0);
+  const difference = newBalance - oldBalance;
+
+  const { data: updated, error: updateError } = await supabaseAdmin
+    .from('users')
+    .update({ 
+      balance: newBalance, 
+      updated_at: new Date().toISOString() 
+    })
+    .eq('id', userId)
+    .select('id, email, balance')
+    .single();
+
+  if (updateError) {
+    console.error('Balance update error:', updateError);
+    return res.status(500).json({ message: 'Failed to update balance.' });
+  }
+
+  if (difference !== 0) {
+    await supabaseAdmin
+      .from('transactions')
+      .insert({
+        user_id: userId,
+        type: difference > 0 ? 'deposit' : 'withdrawal',
+        amount: Math.abs(difference),
+        method: 'admin',
+        details: { note: `Balance adjusted by admin from ${oldBalance.toFixed(2)} to ${newBalance.toFixed(2)}` },
+        status: 'completed'
+      });
+  }
+
+  res.json({
+    message: `Balance updated successfully (${difference > 0 ? '+' : ''}${difference.toFixed(2)}).`,
+    user: updated
+  });
+});
+
+// ============================================================
+// GET /admin/transactions/pending – Pending withdrawals
+// ============================================================
 router.get('/transactions/pending', verifyToken, isAdmin, async (req, res) => {
+  console.log('📥 Fetching pending withdrawals...');
   const { data, error } = await supabaseAdmin
     .from('transactions')
     .select('*, users(email, first_name, last_name)')
@@ -32,22 +138,37 @@ router.get('/transactions/pending', verifyToken, isAdmin, async (req, res) => {
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
 
-  if (error) return res.status(500).json({ message: 'Failed to fetch.' });
+  if (error) {
+    console.error('Fetch pending withdrawals error:', error);
+    return res.status(500).json({ message: 'Failed to fetch pending withdrawals.' });
+  }
+
+  console.log(`✅ Found ${data.length} pending withdrawals`);
   res.json({ transactions: data });
 });
 
-// GET /admin/transactions/all – all transactions for history
+// ============================================================
+// GET /admin/transactions/all – All transactions
+// ============================================================
 router.get('/transactions/all', verifyToken, isAdmin, async (req, res) => {
+  console.log('📥 Fetching all transactions...');
   const { data, error } = await supabaseAdmin
     .from('transactions')
     .select('*, users(email, first_name, last_name)')
     .order('created_at', { ascending: false });
 
-  if (error) return res.status(500).json({ message: 'Failed to fetch.' });
+  if (error) {
+    console.error('Fetch all transactions error:', error);
+    return res.status(500).json({ message: 'Failed to fetch transactions.' });
+  }
+
+  console.log(`✅ Found ${data.length} total transactions`);
   res.json({ transactions: data });
 });
 
-// PATCH /admin/transactions/:transactionId/status – update status & send email
+// ============================================================
+// PATCH /admin/transactions/:transactionId/status – Update status & send email
+// ============================================================
 router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async (req, res) => {
   const { transactionId } = req.params;
   const { status, admin_notes } = req.body;
@@ -58,6 +179,7 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
   }
 
   try {
+    // Get transaction with user details
     const { data: transaction, error: fetchError } = await supabaseAdmin
       .from('transactions')
       .select('*, users(email, first_name, last_name)')
@@ -68,6 +190,7 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
       return res.status(404).json({ message: 'Transaction not found.' });
     }
 
+    // Update status
     const updates = {
       status,
       updated_at: new Date().toISOString(),
@@ -87,7 +210,7 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
 
     if (updateError) {
       console.error('Status update error:', updateError);
-      return res.status(500).json({ message: 'Failed to update status.' });
+      return res.status(500).json({ message: 'Failed to update status. Error: ' + updateError.message });
     }
 
     // Send email for all statuses EXCEPT draft
@@ -106,7 +229,9 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
   }
 });
 
-// Email helper – sends email for any status (pending, completed, failed, cancelled)
+// ============================================================
+// EMAIL HELPER
+// ============================================================
 const sendTransactionStatusEmail = async (transaction) => {
   try {
     const user = transaction.users;
@@ -117,19 +242,19 @@ const sendTransactionStatusEmail = async (transaction) => {
         subject: '⏳ Withdrawal Pending Review – Cresta Markets',
         color: '#f59e0b',
         icon: '⏳',
-        message: 'Your withdrawal request is now pending admin review. You will receive an update once it is processed.'
+        message: 'Your withdrawal request is now pending admin review.'
       },
       completed: {
         subject: '✅ Withdrawal Completed – Cresta Markets',
         color: '#00C853',
         icon: '✅',
-        message: 'Your withdrawal has been successfully processed and funds have been sent to your account.'
+        message: 'Your withdrawal has been successfully processed and funds have been sent.'
       },
       failed: {
         subject: '❌ Withdrawal Failed – Cresta Markets',
         color: '#FF3D57',
         icon: '❌',
-        message: 'Your withdrawal request could not be processed. Please contact support for assistance.'
+        message: 'Your withdrawal request could not be processed. Please contact support.'
       },
       cancelled: {
         subject: '🚫 Withdrawal Cancelled – Cresta Markets',
