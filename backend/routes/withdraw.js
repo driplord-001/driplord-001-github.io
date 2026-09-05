@@ -3,9 +3,7 @@ const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { supabaseAdmin } = require('../supabase/client');
 
-// ============================================================
-// POST /api/withdraw – NO EMAIL SENT (admin sends later)
-// ============================================================
+// POST /api/withdraw – NO EMAIL
 router.post('/withdraw', verifyToken, async (req, res) => {
   const { amount, method, details } = req.body;
   const userId = req.user.id;
@@ -18,7 +16,6 @@ router.post('/withdraw', verifyToken, async (req, res) => {
   }
 
   try {
-    // Get user balance
     const { data: user, error: userError } = await supabaseAdmin
       .from('users')
       .select('balance, email, first_name, last_name')
@@ -34,7 +31,6 @@ router.post('/withdraw', verifyToken, async (req, res) => {
       return res.status(400).json({ message: 'Insufficient balance.' });
     }
 
-    // Deduct balance
     const newBalance = currentBalance - amount;
     const { error: updateError } = await supabaseAdmin
       .from('users')
@@ -46,7 +42,6 @@ router.post('/withdraw', verifyToken, async (req, res) => {
       return res.status(500).json({ message: 'Failed to update balance.' });
     }
 
-    // Create transaction with status 'pending'
     const { data: tx, error: txError } = await supabaseAdmin
       .from('transactions')
       .insert({
@@ -61,14 +56,12 @@ router.post('/withdraw', verifyToken, async (req, res) => {
       .single();
 
     if (txError) {
-      // Rollback balance
       await supabaseAdmin.from('users').update({ balance: currentBalance }).eq('id', userId);
       console.error('Transaction record error:', txError);
       return res.status(500).json({ message: 'Failed to create withdrawal record.' });
     }
 
-    // ✅ NO EMAIL SENT HERE – admin will trigger email on status change
-
+    // ✅ NO EMAIL SENT HERE
     res.status(201).json({
       message: 'Withdrawal submitted successfully. Awaiting admin approval.',
       withdrawalId: tx.id,
