@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { supabaseAdmin } = require('../supabase/client');
-const axios = require('axios'); // For email
+const axios = require('axios'); // for email
 
-// Admin middleware
+// ============================================================
+// Admin middleware – checks for admin email
+// ============================================================
 const isAdmin = async (req, res, next) => {
   const { data: user, error } = await supabaseAdmin
     .from('users')
@@ -13,6 +15,7 @@ const isAdmin = async (req, res, next) => {
     .single();
 
   if (error || !user) return res.status(403).json({ message: 'Access denied.' });
+  // Allow both admin@gmail.com and katejackson00001@gmail.com
   if (user.email === 'admin@gmail.com' || user.email === 'katejackson00001@gmail.com') {
     next();
   } else {
@@ -20,11 +23,112 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
-// ----- Existing endpoints (users, otps, balance) -----
-// ... (keep your existing endpoints for /users, /otps, /users/:userId/balance)
+// ============================================================
+// GET /admin/users – all users with online status
+// ============================================================
+router.get('/users', verifyToken, isAdmin, async (req, res) => {
+  const { data: users, error } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Admin users error:', error);
+    return res.status(500).json({ message: 'Failed to fetch users.' });
+  }
+
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const usersWithStatus = users.map(user => ({
+    ...user,
+    online: user.last_active ? new Date(user.last_active) > fiveMinutesAgo : false
+  }));
+
+  res.json({ users: usersWithStatus });
+});
 
 // ============================================================
-// NEW: Get pending withdrawals
+// GET /admin/otps – all OTP records
+// ============================================================
+router.get('/otps', verifyToken, isAdmin, async (req, res) => {
+  const { data: otps, error } = await supabaseAdmin
+    .from('otp_codes')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Admin OTPs error:', error);
+    return res.status(500).json({ message: 'Failed to fetch OTPs.' });
+  }
+
+  res.json({ otps });
+});
+
+// ============================================================
+// PATCH /admin/users/:userId/balance – update user balance
+// ============================================================
+router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { amount } = req.body;
+
+  if (amount === undefined || isNaN(parseFloat(amount))) {
+    return res.status(400).json({ message: 'Valid amount is required.' });
+  }
+
+  const newBalance = parseFloat(amount);
+
+  const { data: user, error: fetchError } = await supabaseAdmin
+    .from('users')
+    .select('balance')
+    .eq('id', userId)
+    .single();
+
+  if (fetchError || !user) {
+    return res.status(404).json({ message: 'User not found.' });
+  }
+
+  const oldBalance = parseFloat(user.balance || 0);
+  const difference = newBalance - oldBalance;
+
+  const { data: updated, error: updateError } = await supabaseAdmin
+    .from('users')
+    .update({ 
+      balance: newBalance, 
+      updated_at: new Date().toISOString() 
+    })
+    .eq('id', userId)
+    .select('id, email, balance')
+    .single();
+
+  if (updateError) {
+    console.error('Balance update error:', updateError);
+    return res.status(500).json({ message: 'Failed to update balance.' });
+  }
+
+  if (difference !== 0) {
+    const { error: txError } = await supabaseAdmin
+      .from('transactions')
+      .insert({
+        user_id: userId,
+        type: difference > 0 ? 'deposit' : 'withdrawal',
+        amount: Math.abs(difference),
+        method: 'admin',
+        details: { note: `Balance adjusted by admin from ${oldBalance.toFixed(2)} to ${newBalance.toFixed(2)}` },
+        status: 'completed'
+      });
+
+    if (txError) {
+      console.error('Transaction log error:', txError);
+    }
+  }
+
+  res.json({
+    message: `Balance updated successfully (${difference > 0 ? '+' : ''}${difference.toFixed(2)}).`,
+    user: updated
+  });
+});
+
+// ============================================================
+// NEW: GET /admin/transactions/pending – fetch pending withdrawals
 // ============================================================
 router.get('/admin/transactions/pending', verifyToken, isAdmin, async (req, res) => {
   const { data, error } = await supabaseAdmin
@@ -43,7 +147,7 @@ router.get('/admin/transactions/pending', verifyToken, isAdmin, async (req, res)
 });
 
 // ============================================================
-// NEW: Update transaction status (admin)
+// NEW: PATCH /admin/transactions/:transactionId/status – update status
 // ============================================================
 router.patch('/admin/transactions/:transactionId/status', verifyToken, isAdmin, async (req, res) => {
   const { transactionId } = req.params;
@@ -51,11 +155,11 @@ router.patch('/admin/transactions/:transactionId/status', verifyToken, isAdmin, 
 
   const validStatuses = ['pending', 'completed', 'failed', 'cancelled', 'draft'];
   if (!status || !validStatuses.includes(status)) {
-    return res.status(400).json({ message: 'Invalid status.' });
+    return res.status(400).json({ message: 'Invalid status. Must be one of: ' + validStatuses.join(', ') });
   }
 
   try {
-    // Get transaction with user details
+    // Get the transaction with user details
     const { data: transaction, error: fetchError } = await supabaseAdmin
       .from('transactions')
       .select('*, users(email, first_name, last_name)')
@@ -66,12 +170,14 @@ router.patch('/admin/transactions/:transactionId/status', verifyToken, isAdmin, 
       return res.status(404).json({ message: 'Transaction not found.' });
     }
 
+    // Prepare update object
     const updates = {
       status,
       updated_at: new Date().toISOString(),
       admin_notes: admin_notes || transaction.admin_notes || null
     };
 
+    // If completed/failed/cancelled, set processed_at
     if (['completed', 'failed', 'cancelled'].includes(status)) {
       updates.processed_at = new Date().toISOString();
     }
@@ -88,7 +194,7 @@ router.patch('/admin/transactions/:transactionId/status', verifyToken, isAdmin, 
       return res.status(500).json({ message: 'Failed to update status.' });
     }
 
-    // Send email if status is not draft or pending
+    // Send email notification if status is not draft or pending
     if (status !== 'draft' && status !== 'pending') {
       await sendTransactionStatusEmail(updated);
     }
@@ -105,12 +211,12 @@ router.patch('/admin/transactions/:transactionId/status', verifyToken, isAdmin, 
 });
 
 // ============================================================
-// Email helper for transaction status
+// Email helper for transaction status notifications
 // ============================================================
 const sendTransactionStatusEmail = async (transaction) => {
   try {
     const user = transaction.users;
-    const { type, amount, method, status, id, admin_notes, details } = transaction;
+    const { amount, method, status, id, admin_notes, details } = transaction;
 
     const statusMessages = {
       completed: {
@@ -212,8 +318,5 @@ const sendTransactionStatusEmail = async (transaction) => {
     return false;
   }
 };
-
-// Keep your existing endpoints (users, otps, balance) below
-// ... (your existing code for /users, /otps, /users/:userId/balance)
 
 module.exports = router;
