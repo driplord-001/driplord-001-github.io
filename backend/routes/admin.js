@@ -23,16 +23,14 @@ const isAdmin = async (req, res, next) => {
 };
 
 // ============================================================
-// GET /admin/users – All users with online status
+// GET /admin/users
 // ============================================================
 router.get('/users', verifyToken, isAdmin, async (req, res) => {
-  console.log('📥 Fetching all users...');
   try {
     const { data: users, error } = await supabaseAdmin
       .from('users')
       .select('*')
       .order('created_at', { ascending: false });
-
     if (error) throw error;
 
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
@@ -41,7 +39,6 @@ router.get('/users', verifyToken, isAdmin, async (req, res) => {
       online: user.last_active ? new Date(user.last_active) > fiveMinutesAgo : false
     }));
 
-    console.log(`✅ Found ${usersWithStatus.length} users`);
     res.json({ users: usersWithStatus });
   } catch (err) {
     console.error('Admin users error:', err);
@@ -50,18 +47,15 @@ router.get('/users', verifyToken, isAdmin, async (req, res) => {
 });
 
 // ============================================================
-// GET /admin/otps – All OTP records
+// GET /admin/otps
 // ============================================================
 router.get('/otps', verifyToken, isAdmin, async (req, res) => {
-  console.log('📥 Fetching all OTPs...');
   try {
     const { data: otps, error } = await supabaseAdmin
       .from('otp_codes')
       .select('*')
       .order('created_at', { ascending: false });
-
     if (error) throw error;
-    console.log(`✅ Found ${otps.length} OTPs`);
     res.json({ otps });
   } catch (err) {
     console.error('Admin OTPs error:', err);
@@ -70,7 +64,7 @@ router.get('/otps', verifyToken, isAdmin, async (req, res) => {
 });
 
 // ============================================================
-// PATCH /admin/users/:userId/balance – Update balance
+// PATCH /admin/users/:userId/balance
 // ============================================================
 router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) => {
   const { userId } = req.params;
@@ -88,9 +82,7 @@ router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) =>
       .eq('id', userId)
       .single();
 
-    if (fetchError || !user) {
-      return res.status(404).json({ message: 'User not found.' });
-    }
+    if (fetchError || !user) return res.status(404).json({ message: 'User not found.' });
 
     const oldBalance = parseFloat(user.balance || 0);
     const difference = newBalance - oldBalance;
@@ -105,16 +97,14 @@ router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) =>
     if (updateError) throw updateError;
 
     if (difference !== 0) {
-      await supabaseAdmin
-        .from('transactions')
-        .insert({
-          user_id: userId,
-          type: difference > 0 ? 'deposit' : 'withdrawal',
-          amount: Math.abs(difference),
-          method: 'admin',
-          details: { note: `Balance adjusted by admin from ${oldBalance.toFixed(2)} to ${newBalance.toFixed(2)}` },
-          status: 'completed'
-        });
+      await supabaseAdmin.from('transactions').insert({
+        user_id: userId,
+        type: difference > 0 ? 'deposit' : 'withdrawal',
+        amount: Math.abs(difference),
+        method: 'admin',
+        details: { note: `Balance adjusted by admin from ${oldBalance.toFixed(2)} to ${newBalance.toFixed(2)}` },
+        status: 'completed'
+      });
     }
 
     res.json({
@@ -128,40 +118,15 @@ router.patch('/users/:userId/balance', verifyToken, isAdmin, async (req, res) =>
 });
 
 // ============================================================
-// GET /admin/transactions/pending – Pending withdrawals
-// ============================================================
-router.get('/transactions/pending', verifyToken, isAdmin, async (req, res) => {
-  console.log('📥 Fetching pending withdrawals...');
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('transactions')
-      .select('*, users(email, first_name, last_name)')
-      .eq('type', 'withdrawal')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    console.log(`✅ Found ${data.length} pending withdrawals`);
-    res.json({ transactions: data });
-  } catch (err) {
-    console.error('Fetch pending withdrawals error:', err);
-    res.status(500).json({ message: 'Failed to fetch pending withdrawals.' });
-  }
-});
-
-// ============================================================
 // GET /admin/transactions/all – All transactions
 // ============================================================
 router.get('/transactions/all', verifyToken, isAdmin, async (req, res) => {
-  console.log('📥 Fetching all transactions...');
   try {
     const { data, error } = await supabaseAdmin
       .from('transactions')
       .select('*, users(email, first_name, last_name)')
       .order('created_at', { ascending: false });
-
     if (error) throw error;
-    console.log(`✅ Found ${data.length} total transactions`);
     res.json({ transactions: data });
   } catch (err) {
     console.error('Fetch all transactions error:', err);
@@ -170,7 +135,7 @@ router.get('/transactions/all', verifyToken, isAdmin, async (req, res) => {
 });
 
 // ============================================================
-// PATCH /admin/transactions/:transactionId/status – Update status & send email
+// PATCH /admin/transactions/:id/status – Update & track email
 // ============================================================
 router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async (req, res) => {
   const { transactionId } = req.params;
@@ -210,17 +175,37 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
       .single();
 
     if (updateError) {
-      console.error('Status update error:', updateError);
       return res.status(500).json({ message: 'Failed to update status. Error: ' + updateError.message });
     }
 
-    // Send email for all statuses EXCEPT draft
+    // Send email for all statuses except draft
+    let emailSent = false;
     if (status !== 'draft') {
-      await sendTransactionStatusEmail(updated);
+      emailSent = await sendTransactionStatusEmail(updated);
+    }
+
+    // Append to emails_sent log
+    if (emailSent) {
+      const currentLog = Array.isArray(transaction.emails_sent) ? transaction.emails_sent : [];
+      currentLog.push({ status, sent_at: new Date().toISOString() });
+
+      const { data: final } = await supabaseAdmin
+        .from('transactions')
+        .update({ emails_sent: currentLog })
+        .eq('id', transactionId)
+        .select('*, users(email, first_name, last_name)')
+        .single();
+
+      return res.json({
+        message: `Status updated to ${status} & email sent`,
+        email_sent: true,
+        transaction: final
+      });
     }
 
     res.json({
-      message: `Transaction status updated to ${status}`,
+      message: `Status updated to ${status}`,
+      email_sent: false,
       transaction: updated
     });
   } catch (err) {
@@ -230,7 +215,7 @@ router.patch('/transactions/:transactionId/status', verifyToken, isAdmin, async 
 });
 
 // ============================================================
-// EMAIL HELPER – FXSmartbull branding
+// EMAIL HELPER
 // ============================================================
 const sendTransactionStatusEmail = async (transaction) => {
   try {
@@ -238,30 +223,10 @@ const sendTransactionStatusEmail = async (transaction) => {
     const { amount, method, status, id, admin_notes, details } = transaction;
 
     const statusMessages = {
-      pending: {
-        subject: '⏳ Withdrawal Pending Review – FXSmartbull',
-        color: '#f59e0b',
-        icon: '⏳',
-        message: 'Your withdrawal request is now pending admin review.'
-      },
-      completed: {
-        subject: '✅ Withdrawal Completed – FXSmartbull',
-        color: '#00C853',
-        icon: '✅',
-        message: 'Your withdrawal has been successfully processed and funds have been sent.'
-      },
-      failed: {
-        subject: '❌ Withdrawal Failed – FXSmartbull',
-        color: '#FF3D57',
-        icon: '❌',
-        message: 'Your withdrawal request could not be processed. Please contact support.'
-      },
-      cancelled: {
-        subject: '🚫 Withdrawal Cancelled – FXSmartbull',
-        color: '#f59e0b',
-        icon: '🚫',
-        message: 'Your withdrawal request has been cancelled.'
-      }
+      pending: { subject: '⏳ Withdrawal Pending Review – FXSmartbull', color: '#f59e0b', icon: '⏳', message: 'Your withdrawal request is now pending admin review.' },
+      completed: { subject: '✅ Withdrawal Completed – FXSmartbull', color: '#00C853', icon: '✅', message: 'Your withdrawal has been successfully processed and funds have been sent.' },
+      failed: { subject: '❌ Withdrawal Failed – FXSmartbull', color: '#FF3D57', icon: '❌', message: 'Your withdrawal request could not be processed. Please contact support.' },
+      cancelled: { subject: '🚫 Withdrawal Cancelled – FXSmartbull', color: '#f59e0b', icon: '🚫', message: 'Your withdrawal request has been cancelled.' }
     };
 
     const statusInfo = statusMessages[status];
@@ -306,8 +271,7 @@ const sendTransactionStatusEmail = async (transaction) => {
           <tr style="border-bottom: 1px solid rgba(212,175,55,0.2);">
             <td style="padding: 8px 0; color: #aaa;">Admin Notes</td>
             <td style="padding: 8px 0; text-align: right; font-size: 13px; color: #f59e0b;">${admin_notes}</td>
-          </tr>
-          ` : ''}
+          </tr>` : ''}
         </table>
         <p style="color: #ddd;">If you have any questions, please contact our support team.</p>
         <hr style="border-color: rgba(212,175,55,0.1);" />
@@ -328,12 +292,7 @@ const sendTransactionStatusEmail = async (transaction) => {
         subject: statusInfo.subject,
         htmlContent: emailHtml
       },
-      {
-        headers: {
-          'api-key': apiKey,
-          'Content-Type': 'application/json'
-        }
-      }
+      { headers: { 'api-key': apiKey, 'Content-Type': 'application/json' } }
     );
 
     console.log(`✅ Status email sent for transaction #${id}: ${status}`);
